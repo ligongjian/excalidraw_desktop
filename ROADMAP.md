@@ -32,6 +32,7 @@
 | 拖拽 / 粘贴图片入画布 | ✅ | Excalidraw 原生支持；`tauri.conf.json` 设 `dragDropEnabled:false` 释放 HTML5 拖放，粘贴与拖放图片均可直接入画布 |
 | 导出 SVG / PDF | ✅ | `exportToSvg` 矢量导出；SVG→离屏渲染→jsPDF 生成 PDF（2x 清晰） |
 | 复制为图片 / 复制 JSON | ✅ | `exportToClipboard` 复制为 PNG；`serializeAsJSON` + 剪贴板复制 JSON |
+| 懒加载 / 首屏性能优化 | ✅ | Excalidraw 与"关于"对话框 React.lazy 拆成独立 chunk；导出/保存工具函数动态 import，首屏只加载应用骨架 |
 | 保存状态指示 | ✅ | 已保存/未保存胶囊，内容签名判定，不误判视图变化 |
 | 自绘对话框系统 | ✅ | DialogProvider：confirm / alert / toast，替换原生弹窗 |
 | 深色/浅色模式 | ✅ | Tailwind `class` 策略 + Excalidraw 内部主题同步 |

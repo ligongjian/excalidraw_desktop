@@ -1,13 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  Excalidraw,
-  exportToBlob,
-  exportToSvg,
-  exportToClipboard,
-  serializeAsJSON,
-  restore,
-  MIME_TYPES,
-} from "@excalidraw/excalidraw";
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import type {
   ExcalidrawImperativeAPI,
   ExcalidrawInitialDataState,
@@ -17,7 +15,6 @@ import type { ExcalidrawElement } from "@excalidraw/excalidraw/element/types";
 import TitleBar from "./components/TitleBar";
 import StatusBar from "./components/StatusBar";
 import TabBar, { type TabData } from "./components/TabBar";
-import AboutDialog from "./components/AboutDialog";
 import SplashScreen from "./components/SplashScreen";
 import DialogProvider, { useDialogs } from "./components/ui/DialogProvider";
 import {
@@ -28,17 +25,6 @@ import {
   readDraft,
   clearDraft,
 } from "./lib/file";
-
-// 模块级常量，避免每次渲染生成新对象导致 Excalidraw 重复渲染。
-// as const：让 export/toggleTheme 等保持字面量类型，满足 UIOptions 的窄类型约束
-const UI_OPTIONS = {
-  canvasActions: {
-    export: false,
-    saveToActiveFile: false,
-    loadScene: false,
-    toggleTheme: false,
-  },
-} as const;
 
 // 定时自动保存到临时草稿的间隔（毫秒）：默认每 5 分钟
 const AUTO_SAVE_MS = 5 * 60 * 1000;
@@ -65,39 +51,21 @@ export default function App() {
   );
 }
 
-// 每个画布标签对应一个常驻的 Excalidraw 实例，切换只改显示/隐藏，
-// 场景、缩放、选中状态都保存在实例内部，零数据丢失。
-// 打开文件时通过 initialData 在挂载时直接初始化画布，
-// 避免"先空实例、再 updateScene 注入"带来的时序问题（内容闪烁、误标未保存）。
-function CanvasPane(props: {
-  tabId: string;
-  active: boolean;
-  initialData?: ExcalidrawInitialDataState;
-  onAPI: (id: string, api: ExcalidrawImperativeAPI) => void;
-  onChange: (
-    id: string,
-    elements: readonly ExcalidrawElement[],
-    appState: AppState,
-  ) => void;
-}) {
-  const handleAPI = useCallback(
-    (api: ExcalidrawImperativeAPI) => props.onAPI(props.tabId, api),
-    [props.tabId, props.onAPI],
-  );
-  const handleChange = useCallback(
-    (elements: readonly ExcalidrawElement[], appState: AppState) =>
-      props.onChange(props.tabId, elements, appState),
-    [props.tabId, props.onChange],
-  );
+// 画布（Excalidraw）按需懒加载：Excalidraw 是体积最大的库，
+// 拆成独立 chunk，首屏只加载应用骨架，画布在需要时后台加载（配合启动画面）
+const CanvasPane = lazy(() => import("./components/CanvasPane"));
+
+// "关于"对话框：点击才加载（含微信二维码图片等，不进首屏）
+const AboutDialog = lazy(() => import("./components/AboutDialog"));
+
+// 画布 chunk 加载期间的占位
+function CanvasFallback() {
   return (
-    <div className={props.active ? "absolute inset-0" : "hidden"}>
-      <Excalidraw
-        initialData={props.initialData}
-        excalidrawAPI={handleAPI}
-        langCode="zh-CN"
-        onChange={handleChange}
-        UIOptions={UI_OPTIONS}
-      />
+    <div className="flex h-full w-full items-center justify-center bg-zinc-100 dark:bg-zinc-950">
+      <div className="flex items-center gap-2 text-sm text-zinc-400 dark:text-zinc-500">
+        <span className="h-3 w-3 animate-spin rounded-full border-2 border-zinc-300 border-t-brand-500" />
+        正在加载画布…
+      </div>
     </div>
   );
 }
@@ -233,6 +201,7 @@ function Shell() {
     const res = await openScene();
     if (!res) return;
     try {
+      const { restore } = await import("@excalidraw/excalidraw");
       const data = restore(JSON.parse(res.data), null, null);
       const id = genId();
       const name = res.path.split(/[\\/]/).pop() ?? res.path;
@@ -345,6 +314,7 @@ function Shell() {
         const elements = api.getSceneElements();
         const appState = api.getAppState();
         const files = api.getFiles();
+        const { serializeAsJSON } = await import("@excalidraw/excalidraw");
         const str = serializeAsJSON(elements, appState, files, "local");
         const p = await saveScene(str, as ? undefined : tab?.filePath ?? undefined);
         // 用户在保存/另存为对话框中点了取消：保持未保存状态，不报错
@@ -386,6 +356,7 @@ function Shell() {
         const elements = api.getSceneElements();
         const appState = api.getAppState();
         const files = api.getFiles();
+        const { exportToBlob } = await import("@excalidraw/excalidraw");
         const blob = await exportToBlob({
           elements,
           appState: { ...appState, theme },
@@ -417,6 +388,7 @@ function Shell() {
       const elements = api.getSceneElements();
       const appState = api.getAppState();
       const files = api.getFiles();
+      const { exportToSvg } = await import("@excalidraw/excalidraw");
       const svg = await exportToSvg({
         elements,
         appState: { ...appState, theme },
@@ -445,6 +417,7 @@ function Shell() {
       const elements = api.getSceneElements();
       const appState = api.getAppState();
       const files = api.getFiles();
+      const { exportToSvg } = await import("@excalidraw/excalidraw");
       const svg = await exportToSvg({
         elements,
         appState: { ...appState, theme },
@@ -508,6 +481,7 @@ function Shell() {
       const elements = api.getSceneElements();
       const appState = api.getAppState();
       const files = api.getFiles();
+      const { exportToClipboard } = await import("@excalidraw/excalidraw");
       await exportToClipboard(elements, { ...appState, theme }, files);
       dialogs.toast({ message: "已复制为图片", kind: "success" });
     } catch (e) {
@@ -522,6 +496,7 @@ function Shell() {
       const elements = api.getSceneElements();
       const appState = api.getAppState();
       const files = api.getFiles();
+      const { serializeAsJSON } = await import("@excalidraw/excalidraw");
       const str = serializeAsJSON(elements, appState, files, "local");
       await navigator.clipboard.writeText(str);
       dialogs.toast({ message: "已复制 JSON", kind: "success" });
@@ -542,6 +517,7 @@ function Shell() {
 
   // 把当前所有标签的场景序列化为草稿并落盘
   const saveDraft = useCallback(async () => {
+    const { serializeAsJSON } = await import("@excalidraw/excalidraw");
     const drafts: DraftTab[] = [];
     for (const t of tabsRef.current) {
       const api = apisRef.current[t.id];
@@ -596,6 +572,7 @@ function Shell() {
       }
       const newTabs: TabData[] = [];
       let firstActive: string | null = null;
+      const { restore } = await import("@excalidraw/excalidraw");
       for (const d of parsed.tabs) {
         try {
           const data = restore(JSON.parse(d.scene), null, null);
@@ -670,6 +647,7 @@ function Shell() {
         });
         if (!ok) return;
         // 先正式保存所有未保存的画布；任一保存失败/取消则留在应用，不退出
+        const { serializeAsJSON } = await import("@excalidraw/excalidraw");
         for (const t of tabsRef.current) {
           if (!t.dirty) continue;
           const api = apisRef.current[t.id];
@@ -757,8 +735,8 @@ function Shell() {
         onOpen={handleOpen}
         onSave={() => handleSave(false)}
         onSaveAs={() => handleSave(true)}
-        onExportPng={() => handleExport(MIME_TYPES.png)}
-        onExportWebp={() => handleExport(MIME_TYPES.webp)}
+        onExportPng={() => handleExport("image/png")}
+        onExportWebp={() => handleExport("image/webp")}
         onExportSvg={handleExportSvg}
         onExportPdf={handleExportPdf}
         onCopyImage={handleCopyImage}
@@ -766,25 +744,31 @@ function Shell() {
         onToggleTheme={handleToggleTheme}
         onAbout={() => setAboutOpen(true)}
       />
-      <div className="relative min-h-0 flex-1">
-        {tabs.map((t) => (
-          <CanvasPane
-            key={t.id}
-            tabId={t.id}
-            active={t.id === activeId}
-            initialData={t.initialData}
-            onAPI={handleAPI}
-            onChange={handleChange}
-          />
-        ))}
-      </div>
+      <Suspense fallback={<CanvasFallback />}>
+        <div className="relative min-h-0 flex-1">
+          {tabs.map((t) => (
+            <CanvasPane
+              key={t.id}
+              tabId={t.id}
+              active={t.id === activeId}
+              initialData={t.initialData}
+              onAPI={handleAPI}
+              onChange={handleChange}
+            />
+          ))}
+        </div>
+      </Suspense>
       <StatusBar count={activeTab?.count ?? 0} zoom={activeTab?.zoom ?? null} />
-      <AboutDialog
-        open={aboutOpen}
-        onClose={() => setAboutOpen(false)}
-        canvases={tabs.length}
-        elements={tabs.reduce((sum, t) => sum + t.count, 0)}
-      />
+      {aboutOpen && (
+        <Suspense fallback={null}>
+          <AboutDialog
+            open
+            onClose={() => setAboutOpen(false)}
+            canvases={tabs.length}
+            elements={tabs.reduce((sum, t) => sum + t.count, 0)}
+          />
+        </Suspense>
+      )}
       <SplashScreen visible={!splashDone} />
     </div>
   );
