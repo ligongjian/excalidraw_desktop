@@ -6,11 +6,16 @@ import {
   restore,
   MIME_TYPES,
 } from "@excalidraw/excalidraw";
-import type { ExcalidrawImperativeAPI, AppState } from "@excalidraw/excalidraw/types";
+import type {
+  ExcalidrawImperativeAPI,
+  ExcalidrawInitialDataState,
+  AppState,
+} from "@excalidraw/excalidraw/types";
 import type { ExcalidrawElement } from "@excalidraw/excalidraw/element/types";
 import TitleBar from "./components/TitleBar";
 import Toolbar from "./components/Toolbar";
 import StatusBar from "./components/StatusBar";
+import TabBar, { type TabData } from "./components/TabBar";
 import DialogProvider, { useDialogs } from "./components/ui/DialogProvider";
 import { openScene, saveScene, exportImage } from "./lib/file";
 
@@ -30,6 +35,10 @@ function elementsKey(elements: readonly ExcalidrawElement[]): string {
   return elements.map((e) => `${e.id}:${e.version}:${e.versionNonce}`).join("|");
 }
 
+function genId(): string {
+  return `tab-${crypto.randomUUID()}`;
+}
+
 export default function App() {
   return (
     <DialogProvider>
@@ -38,22 +47,66 @@ export default function App() {
   );
 }
 
+// 每个画布标签对应一个常驻的 Excalidraw 实例，切换只改显示/隐藏，
+// 场景、缩放、选中状态都保存在实例内部，零数据丢失。
+// 打开文件时通过 initialData 在挂载时直接初始化画布，
+// 避免"先空实例、再 updateScene 注入"带来的时序问题（内容闪烁、误标未保存）。
+function CanvasPane(props: {
+  tabId: string;
+  active: boolean;
+  initialData?: ExcalidrawInitialDataState;
+  onAPI: (id: string, api: ExcalidrawImperativeAPI) => void;
+  onChange: (
+    id: string,
+    elements: readonly ExcalidrawElement[],
+    appState: AppState,
+  ) => void;
+}) {
+  const handleAPI = useCallback(
+    (api: ExcalidrawImperativeAPI) => props.onAPI(props.tabId, api),
+    [props.tabId, props.onAPI],
+  );
+  const handleChange = useCallback(
+    (elements: readonly ExcalidrawElement[], appState: AppState) =>
+      props.onChange(props.tabId, elements, appState),
+    [props.tabId, props.onChange],
+  );
+  return (
+    <div className={props.active ? "absolute inset-0" : "hidden"}>
+      <Excalidraw
+        initialData={props.initialData}
+        excalidrawAPI={handleAPI}
+        langCode="zh-CN"
+        onChange={handleChange}
+        UIOptions={UI_OPTIONS}
+      />
+    </div>
+  );
+}
+
 function Shell() {
   const dialogs = useDialogs();
-  const excRef = useRef<ExcalidrawImperativeAPI | null>(null);
-  // 打开/新建后抑制一次脏标记，避免把"未变化"当作未保存
-  const suppressDirty = useRef(false);
+  const apisRef = useRef<Record<string, ExcalidrawImperativeAPI | null>>({});
 
-  const [filename, setFilename] = useState<string | null>(null);
-  const [dirty, setDirty] = useState(false);
+  const seq = useRef(2); // 初始标签"画布 1"占用了 1
+  const initialTab = useRef<TabData>({
+    id: genId(),
+    name: "画布 1",
+    filePath: null,
+    dirty: false,
+    count: 0,
+    zoom: null,
+    baseline: "",
+    baselineReady: false,
+  });
+
+  const [tabs, setTabs] = useState<TabData[]>([initialTab.current]);
+  const [activeId, setActiveId] = useState<string>(initialTab.current.id);
   const [theme, setTheme] = useState<"light" | "dark">("light");
   const [busy, setBusy] = useState(false);
-  const [count, setCount] = useState(0);
-  const [zoom, setZoom] = useState<number | null>(null);
-  // 防止保存/打开期间快捷键连发触发重复操作
   const saving = useRef(false);
-  // 最近一次已保存/已打开/已新建的内容签名，用于区分"内容被修改"与"视图变化"
-  const baseline = useRef<string>("");
+
+  const activeTab = tabs.find((t) => t.id === activeId) ?? tabs[0];
 
   // 同步 Tailwind 的 class 暗色策略与系统 color-scheme
   useEffect(() => {
@@ -62,62 +115,96 @@ function Shell() {
     root.style.colorScheme = theme;
   }, [theme]);
 
-  const sceneString = useCallback((): string | null => {
-    const api = excRef.current;
-    if (!api) return null;
-    const elements = api.getSceneElements();
-    const appState = api.getAppState();
-    const files = api.getFiles();
-    return serializeAsJSON(elements, appState, files, "local");
-  }, []);
-
-  const handleChange = useCallback(
-    (elements: readonly ExcalidrawElement[], appState: AppState) => {
-      setCount(elements.filter((e) => !e.isDeleted).length);
-      setZoom(appState.zoom.value);
-      if (suppressDirty.current) {
-        suppressDirty.current = false;
-        return;
-      }
-      // 仅在内容签名偏离"已保存基线"时才标脏；
-      // 选中/缩放/视口/保存对话框关闭等视图变化不会改动签名，不再误判
-      if (baseline.current !== elementsKey(elements)) {
-        setDirty(true);
-      }
+  const handleAPI = useCallback(
+    (id: string, api: ExcalidrawImperativeAPI) => {
+      apisRef.current[id] = api;
     },
     [],
   );
 
-  const handleNew = useCallback(async () => {
-    const ok = await dialogs.confirm({
-      title: "新建画布",
-      message: "新建画布将清空当前内容，且无法撤销。是否继续？",
-      okText: "新建",
-      danger: true,
-    });
-    if (!ok) return;
-    excRef.current?.resetScene();
-    suppressDirty.current = true;
-    baseline.current = ""; // 空场景作为新基线
-    setFilename(null);
-    setDirty(false);
-    setCount(0);
-  }, [dialogs]);
+  const handleChange = useCallback(
+    (
+      id: string,
+      elements: readonly ExcalidrawElement[],
+      appState: AppState,
+    ) => {
+      setTabs((prev) =>
+        prev.map((t) => {
+          if (t.id !== id) return t;
+          const key = elementsKey(elements);
+          if (!t.baselineReady) {
+            // 首次渲染的内容即"初始已保存基线"（打开=文件内容，新建=空场景），避免被误标脏
+            return {
+              ...t,
+              baseline: key,
+              baselineReady: true,
+              dirty: false,
+              count: elements.filter((e) => !e.isDeleted).length,
+              zoom: appState.zoom.value,
+            };
+          }
+          return {
+            ...t,
+            dirty: t.baseline !== key,
+            count: elements.filter((e) => !e.isDeleted).length,
+            zoom: appState.zoom.value,
+          };
+        }),
+      );
+    },
+    [],
+  );
+
+  const handleNew = useCallback(() => {
+    const id = genId();
+    setTabs((prev) => [
+      ...prev,
+      {
+        id,
+        name: `画布 ${seq.current++}`,
+        filePath: null,
+        dirty: false,
+        count: 0,
+        zoom: null,
+        baseline: "",
+        baselineReady: false,
+      },
+    ]);
+    setActiveId(id);
+  }, []);
 
   const handleOpen = useCallback(async () => {
     const res = await openScene();
     if (!res) return;
     try {
       const data = restore(JSON.parse(res.data), null, null);
-      excRef.current?.updateScene({
-        elements: data.elements,
-        appState: { ...data.appState, theme },
-      });
-      suppressDirty.current = true;
-      baseline.current = elementsKey(data.elements);
-      setFilename(res.path);
-      setDirty(false);
-      setCount(data.elements.filter((e) => !e.isDeleted).length);
+      const id = genId();
+      const name = res.path.split(/[\\/]/).pop() ?? res.path;
+      setTabs((prev) => [
+        ...prev,
+        {
+          id,
+          name,
+          filePath: res.path,
+          dirty: false,
+          count: 0,
+          zoom: null,
+          baseline: "",
+          baselineReady: false,
+          // 通过 initialData 在挂载时直接初始化画布；
+          // 只带 elements 与视觉性 appState，不注入视图坐标，内容落在默认视图
+          initialData: {
+            elements: data.elements,
+            appState: {
+              theme,
+              viewBackgroundColor: data.appState.viewBackgroundColor,
+              gridSize: data.appState.gridSize,
+            },
+            files: data.files,
+          },
+        },
+      ]);
+      setActiveId(id);
       dialogs.toast({ message: "画布已打开", kind: "success" });
     } catch (e) {
       dialogs.alert({
@@ -128,43 +215,112 @@ function Shell() {
     }
   }, [theme, dialogs]);
 
+  const handleSelect = useCallback((id: string) => {
+    setActiveId(id);
+  }, []);
+
+  const handleClose = useCallback(
+    async (id: string) => {
+      const target = tabs.find((t) => t.id === id);
+      if (!target) return;
+
+      // 关闭最后一个标签：重置为空画布
+      if (tabs.length === 1) {
+        if (target.dirty) {
+          const ok = await dialogs.confirm({
+            title: "关闭画布",
+            message: "当前画布有未保存的更改，关闭将丢弃这些更改。是否继续？",
+            okText: "丢弃并清空",
+            danger: true,
+          });
+          if (!ok) return;
+        }
+        apisRef.current[id]?.resetScene();
+        setTabs((prev) =>
+          prev.map((t) =>
+            t.id === id
+              ? {
+                  ...t,
+                  name: "画布 1",
+                  filePath: null,
+                  dirty: false,
+                  count: 0,
+                  zoom: null,
+                  baseline: "",
+                  baselineReady: false,
+                  initialData: undefined,
+                }
+              : t,
+          ),
+        );
+        return;
+      }
+
+      if (target.dirty) {
+        const ok = await dialogs.confirm({
+          title: "关闭画布",
+          message: `“${target.name}”有未保存的更改，关闭将丢弃这些更改。是否继续？`,
+          okText: "关闭并丢弃",
+          danger: true,
+        });
+        if (!ok) return;
+      }
+
+      const idx = tabs.findIndex((t) => t.id === id);
+      delete apisRef.current[id];
+      setTabs((prev) => prev.filter((t) => t.id !== id));
+      if (id === activeId) {
+        const next = tabs[idx + 1] ?? tabs[idx - 1];
+        if (next) setActiveId(next.id);
+      }
+    },
+    [tabs, activeId, dialogs],
+  );
+
   const handleSave = useCallback(
     async (as?: boolean) => {
-      if (saving.current) return;
-      const str = sceneString();
-      if (!str) return;
+      const id = activeId;
+      const api = apisRef.current[id];
+      if (!api || saving.current) return;
+      const tab = tabs.find((t) => t.id === id);
       saving.current = true;
       setBusy(true);
       try {
-        const p = await saveScene(str, as ? undefined : filename ?? undefined);
-        setFilename(p);
-        // 保存成功后，把当前内容记为新的"已保存基线"
-        baseline.current = elementsKey(excRef.current?.getSceneElements() ?? []);
-        setDirty(false);
+        const elements = api.getSceneElements();
+        const appState = api.getAppState();
+        const files = api.getFiles();
+        const str = serializeAsJSON(elements, appState, files, "local");
+        const p = await saveScene(str, as ? undefined : tab?.filePath ?? undefined);
+        const key = elementsKey(api.getSceneElements());
+        setTabs((prev) =>
+          prev.map((t) =>
+            t.id === id
+              ? { ...t, filePath: p, dirty: false, baseline: key, baselineReady: true }
+              : t,
+          ),
+        );
         dialogs.toast({ message: "已保存", kind: "success" });
       } catch (e) {
-        dialogs.alert({
-          title: "保存失败",
-          message: String(e),
-          kind: "error",
-        });
+        dialogs.alert({ title: "保存失败", message: String(e), kind: "error" });
       } finally {
         saving.current = false;
         setBusy(false);
       }
     },
-    [filename, sceneString, dialogs],
+    [activeId, tabs, dialogs],
   );
 
   const handleExport = useCallback(
     async (mime: "image/png" | "image/webp") => {
-      const api = excRef.current;
+      const id = activeId;
+      const api = apisRef.current[id];
       if (!api) return;
-      const elements = api.getSceneElements();
-      const appState = api.getAppState();
-      const files = api.getFiles();
+      const tab = tabs.find((t) => t.id === id);
       setBusy(true);
       try {
+        const elements = api.getSceneElements();
+        const appState = api.getAppState();
+        const files = api.getFiles();
         const blob = await exportToBlob({
           elements,
           appState: { ...appState, theme },
@@ -174,38 +330,29 @@ function Shell() {
         });
         const bytes = new Uint8Array(await blob.arrayBuffer());
         const ext = mime === "image/png" ? "png" : "webp";
-        const base = filename
-          ? filename.split(/[\\/]/).pop()!.replace(/\.[^.]+$/, "")
-          : "画布";
+        const base = (tab?.name ?? "画布").replace(/\.[^.]+$/, "");
         await exportImage(bytes, `${base}.${ext}`, ext);
         dialogs.toast({ message: `已导出 ${ext.toUpperCase()}` });
       } catch (e) {
-        dialogs.alert({
-          title: "导出失败",
-          message: String(e),
-          kind: "error",
-        });
+        dialogs.alert({ title: "导出失败", message: String(e), kind: "error" });
       } finally {
         setBusy(false);
       }
     },
-    [filename, theme, dialogs],
+    [activeId, tabs, theme, dialogs],
   );
 
   const handleToggleTheme = useCallback(() => {
-    const api = excRef.current;
-    if (!api) return;
     const next = theme === "light" ? "dark" : "light";
-    const appState = api.getAppState();
-    api.updateScene({ appState: { ...appState, theme: next } });
+    Object.values(apisRef.current).forEach((api) => {
+      if (api) {
+        api.updateScene({ appState: { ...api.getAppState(), theme: next } });
+      }
+    });
     setTheme(next);
   }, [theme]);
 
-  const handleAPI = useCallback((api: ExcalidrawImperativeAPI) => {
-    excRef.current = api;
-  }, []);
-
-  // 全局文件快捷键：Ctrl+S 保存 / Ctrl+Shift+S 另存为 / Ctrl+O 打开 / Ctrl+N 新建
+  // 全局文件快捷键：Ctrl+S 保存 / Ctrl+Shift+S 另存为 / Ctrl+O 打开 / Ctrl+N 新建 / Ctrl+W 关闭
   // 用 capture 阶段，抢在 Excalidraw 内部处理之前接管；输入框内不触发
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -233,18 +380,21 @@ function Shell() {
         e.preventDefault();
         e.stopPropagation();
         handleNew();
+      } else if (key === "w") {
+        e.preventDefault();
+        e.stopPropagation();
+        void handleClose(activeId);
       }
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [handleSave, handleOpen, handleNew]);
+  }, [handleSave, handleOpen, handleNew, handleClose, activeId]);
 
   return (
     <div className="flex h-screen flex-col bg-zinc-100 dark:bg-zinc-950">
       <TitleBar />
       <Toolbar
-        filename={filename}
-        dirty={dirty}
+        dirty={activeTab?.dirty ?? false}
         theme={theme}
         disabled={busy}
         onNew={handleNew}
@@ -255,15 +405,26 @@ function Shell() {
         onExportWebp={() => handleExport(MIME_TYPES.webp)}
         onToggleTheme={handleToggleTheme}
       />
+      <TabBar
+        tabs={tabs}
+        activeId={activeId}
+        onSelect={handleSelect}
+        onClose={handleClose}
+        onNew={handleNew}
+      />
       <div className="relative min-h-0 flex-1">
-        <Excalidraw
-          excalidrawAPI={handleAPI}
-          langCode="zh-CN"
-          onChange={handleChange}
-          UIOptions={UI_OPTIONS}
-        />
+        {tabs.map((t) => (
+          <CanvasPane
+            key={t.id}
+            tabId={t.id}
+            active={t.id === activeId}
+            initialData={t.initialData}
+            onAPI={handleAPI}
+            onChange={handleChange}
+          />
+        ))}
       </div>
-      <StatusBar count={count} zoom={zoom} />
+      <StatusBar count={activeTab?.count ?? 0} zoom={activeTab?.zoom ?? null} />
     </div>
   );
 }

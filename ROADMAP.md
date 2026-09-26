@@ -25,7 +25,8 @@
 | 保存画布 | ✅ | rfd 原生对话框，`.excalidraw` / `.json` |
 | 打开画布 | ✅ | 读取并恢复场景（restore） |
 | 导出图片 | ✅ | PNG / WebP（exportToBlob + 原生保存） |
-| 全局快捷键 | ✅ | Ctrl+S 保存 / Ctrl+Shift+S 另存为 / Ctrl+O 打开 / Ctrl+N 新建 |
+| 全局快捷键 | ✅ | Ctrl+S 保存 / Ctrl+Shift+S 另存为 / Ctrl+O 打开 / Ctrl+N 新建标签 / Ctrl+W 关闭标签 |
+| 多画布（多标签） | ✅ | 多画布标签切换，每标签独立场景/文件路径/保存状态，关闭未保存需确认；与 excalidraw-cn 的"多画布能力"对齐 |
 | 保存状态指示 | ✅ | 已保存/未保存胶囊，内容签名判定，不误判视图变化 |
 | 自绘对话框系统 | ✅ | DialogProvider：confirm / alert / toast，替换原生弹窗 |
 | 深色/浅色模式 | ✅ | Tailwind `class` 策略 + Excalidraw 内部主题同步 |
@@ -68,8 +69,7 @@
 
 | 事项 | 说明 |
 |---|---|
-| 多标签页 / 多画布 | 一窗口多画布切换，架构改动较大。 |
-| 云同步 / 账号 | 需要后端与登录体系。 |
+| 画布级云同步 / 账号 | 需要后端与登录体系。 |
 | 多人实时协同 | Excalidraw 协作栈较复杂，属重投入。 |
 
 ---

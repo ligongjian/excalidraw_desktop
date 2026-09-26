@@ -10,7 +10,6 @@ import {
 } from "./icons";
 
 type ToolbarProps = {
-  filename: string | null;
   dirty: boolean;
   theme: "light" | "dark";
   onNew: () => void;
@@ -24,18 +23,10 @@ type ToolbarProps = {
 };
 
 export default function Toolbar(p: ToolbarProps) {
-  const name = p.filename ? p.filename.split(/[\\/]/).pop() : "未命名画布";
-
   return (
     <div className="flex h-12 shrink-0 items-center gap-1 border-b border-zinc-200/80 bg-white px-2.5 dark:border-zinc-700/80 dark:bg-zinc-900">
-      {/* 文件名 + 保存状态 */}
-      <div className="flex min-w-0 items-center gap-2 pr-1">
-        <span
-          className="max-w-[220px] truncate text-[13px] font-semibold text-zinc-800 dark:text-zinc-100"
-          title={p.filename ?? ""}
-        >
-          {name}
-        </span>
+      {/* 当前画布保存状态（文件名显示在标签栏） */}
+      <div className="flex items-center gap-2 pr-1">
         {p.dirty ? (
           <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700 ring-1 ring-inset ring-amber-200 dark:bg-amber-500/15 dark:text-amber-300 dark:ring-amber-500/30">
             <span className="h-1.5 w-1.5 rounded-full bg-amber-500 animate-pulse" />
