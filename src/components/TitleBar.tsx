@@ -50,7 +50,7 @@ export default function TitleBar() {
           Excalidraw 桌面版
         </span>
         <span className="rounded-md bg-zinc-200/60 px-1.5 py-0.5 text-[10px] font-medium text-zinc-500 dark:bg-zinc-700/70 dark:text-zinc-400">
-          v0.1
+          v1.0
         </span>
       </div>
 

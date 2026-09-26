@@ -1,6 +1,6 @@
 [package]
 name = "excalidraw-desktop"
-version = "0.1.0"
+version = "1.0.0"
 description = "Excalidraw 桌面版 —— 手绘白板工具"
 authors = ["you"]
 edition = "2021"

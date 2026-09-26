@@ -13,11 +13,18 @@ import type {
 } from "@excalidraw/excalidraw/types";
 import type { ExcalidrawElement } from "@excalidraw/excalidraw/element/types";
 import TitleBar from "./components/TitleBar";
-import Toolbar from "./components/Toolbar";
 import StatusBar from "./components/StatusBar";
 import TabBar, { type TabData } from "./components/TabBar";
+import AboutDialog from "./components/AboutDialog";
 import DialogProvider, { useDialogs } from "./components/ui/DialogProvider";
-import { openScene, saveScene, exportImage } from "./lib/file";
+import {
+  openScene,
+  saveScene,
+  exportImage,
+  writeDraft,
+  readDraft,
+  clearDraft,
+} from "./lib/file";
 
 // 模块级常量，避免每次渲染生成新对象导致 Excalidraw 重复渲染
 const UI_OPTIONS = {
@@ -28,6 +35,13 @@ const UI_OPTIONS = {
     toggleTheme: false,
   },
 };
+
+// 定时自动保存到临时草稿的间隔（毫秒）：默认每 5 分钟
+const AUTO_SAVE_MS = 5 * 60 * 1000;
+
+// 草稿文件的结构约定
+type DraftTab = { name: string; filePath: string | null; scene: string };
+type DraftPayload = { savedAt: number; tabs: DraftTab[] };
 
 // 元素内容签名：仅用内容唯一标识（id/版本号）。
 // 选中、缩放、视口变化等"视图变化"不会改动它，从而不会被误判为内容被修改
@@ -104,9 +118,19 @@ function Shell() {
   const [activeId, setActiveId] = useState<string>(initialTab.current.id);
   const [theme, setTheme] = useState<"light" | "dark">("light");
   const [busy, setBusy] = useState(false);
+  const [aboutOpen, setAboutOpen] = useState(false);
   const saving = useRef(false);
+  // 实时 tabs 引用：供自动保存 / 关闭拦截等异步回调读取最新标签状态
+  const tabsRef = useRef<TabData[]>([]);
+  // 用户已确认退出后置 true，放行窗口真正关闭，避免再次被拦截
+  const allowCloseRef = useRef(false);
 
   const activeTab = tabs.find((t) => t.id === activeId) ?? tabs[0];
+
+  // 保持 tabsRef 与 tabs 同步
+  useEffect(() => {
+    tabsRef.current = tabs;
+  }, [tabs]);
 
   // 同步 Tailwind 的 class 暗色策略与系统 color-scheme
   useEffect(() => {
@@ -139,6 +163,14 @@ function Shell() {
               baseline: key,
               baselineReady: true,
               dirty: false,
+              count: elements.filter((e) => !e.isDeleted).length,
+              zoom: appState.zoom.value,
+            };
+          }
+          if (t.restored) {
+            // 从草稿恢复的标签：内容来自未保存快照，保持"未保存"提示，直到用户正式保存
+            return {
+              ...t,
               count: elements.filter((e) => !e.isDeleted).length,
               zoom: appState.zoom.value,
             };
@@ -291,11 +323,20 @@ function Shell() {
         const files = api.getFiles();
         const str = serializeAsJSON(elements, appState, files, "local");
         const p = await saveScene(str, as ? undefined : tab?.filePath ?? undefined);
+        // 用户在保存/另存为对话框中点了取消：保持未保存状态，不报错
+        if (p == null) return;
         const key = elementsKey(api.getSceneElements());
         setTabs((prev) =>
           prev.map((t) =>
             t.id === id
-              ? { ...t, filePath: p, dirty: false, baseline: key, baselineReady: true }
+              ? {
+                  ...t,
+                  filePath: p,
+                  dirty: false,
+                  baseline: key,
+                  baselineReady: true,
+                  restored: false,
+                }
               : t,
           ),
         );
@@ -352,6 +393,148 @@ function Shell() {
     setTheme(next);
   }, [theme]);
 
+  // 把当前所有标签的场景序列化为草稿并落盘
+  const saveDraft = useCallback(async () => {
+    const drafts: DraftTab[] = [];
+    for (const t of tabsRef.current) {
+      const api = apisRef.current[t.id];
+      if (!api) continue;
+      const elements = api.getSceneElements();
+      const appState = api.getAppState();
+      const files = api.getFiles();
+      const scene = serializeAsJSON(elements, appState, files, "local");
+      drafts.push({ name: t.name, filePath: t.filePath, scene });
+    }
+    if (drafts.length === 0) return;
+    try {
+      await writeDraft(JSON.stringify({ savedAt: Date.now(), tabs: drafts }));
+    } catch {
+      // 自动保存失败不打断用户，等下一周期重试
+    }
+  }, []);
+
+  // 启动时检测上次遗留的草稿，询问是否恢复
+  const restoreChecked = useRef(false);
+  useEffect(() => {
+    if (restoreChecked.current) return;
+    restoreChecked.current = true;
+    let cancelled = false;
+    (async () => {
+      let raw: string | null = null;
+      try {
+        raw = await readDraft();
+      } catch {
+        return;
+      }
+      if (!raw || cancelled) return;
+      let parsed: DraftPayload;
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        return;
+      }
+      if (!parsed.tabs || parsed.tabs.length === 0) return;
+      const ok = await dialogs.confirm({
+        title: "恢复未保存的画布",
+        message: `检测到上次退出时留下的草稿（${parsed.tabs.length} 个画布，保存于 ${new Date(
+          parsed.savedAt,
+        ).toLocaleString()}）。要恢复它们吗？`,
+        okText: "恢复",
+        danger: true,
+      });
+      if (cancelled) return;
+      if (!ok) {
+        void clearDraft();
+        return;
+      }
+      const newTabs: TabData[] = [];
+      let firstActive: string | null = null;
+      for (const d of parsed.tabs) {
+        try {
+          const data = restore(JSON.parse(d.scene), null, null);
+          const id = genId();
+          newTabs.push({
+            id,
+            name: d.name || "恢复的画布",
+            filePath: d.filePath ?? null,
+            dirty: true,
+            count: data.elements.length,
+            zoom: null,
+            baseline: "",
+            baselineReady: true,
+            restored: true,
+            initialData: {
+              elements: data.elements,
+              appState: {
+                theme,
+                viewBackgroundColor: data.appState.viewBackgroundColor,
+                gridSize: data.appState.gridSize,
+              },
+              files: data.files,
+            },
+          });
+          if (!firstActive) firstActive = id;
+        } catch {
+          // 单条草稿损坏则跳过
+        }
+      }
+      if (newTabs.length > 0) {
+        setTabs(newTabs);
+        if (firstActive) setActiveId(firstActive);
+        void clearDraft();
+        dialogs.toast({
+          message: `已恢复 ${newTabs.length} 个画布`,
+          kind: "success",
+        });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [dialogs, theme]);
+
+  // 定时自动保存：每 N 分钟把全部标签写入草稿
+  useEffect(() => {
+    const h = window.setInterval(() => {
+      void saveDraft();
+    }, AUTO_SAVE_MS);
+    return () => window.clearInterval(h);
+  }, [saveDraft]);
+
+  // 关闭前拦截：有未保存更改时弹自绘确认框，防止误关丢数据
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let disposed = false;
+    (async () => {
+      const { getCurrentWindow } = await import("@tauri-apps/api/window");
+      const win = getCurrentWindow();
+      unlisten = await win.onCloseRequested(async (event) => {
+        if (allowCloseRef.current) return; // 已确认退出，放行
+        const hasDirty = tabsRef.current.some((t) => t.dirty);
+        if (!hasDirty) return; // 无未保存更改，放行
+        event.preventDefault();
+        const ok = await dialogs.confirm({
+          title: "关闭窗口",
+          message:
+            "有画布包含未保存的更改。是否先把当前内容保存为草稿，再退出？草稿可在下次启动时恢复。",
+          okText: "保存草稿并退出",
+          cancelText: "暂不退出",
+          danger: true,
+        });
+        if (ok) {
+          await saveDraft();
+          allowCloseRef.current = true;
+          win.close();
+        }
+      });
+      if (disposed) unlisten?.();
+    })();
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [dialogs, saveDraft]);
+
   // 全局文件快捷键：Ctrl+S 保存 / Ctrl+Shift+S 另存为 / Ctrl+O 打开 / Ctrl+N 新建 / Ctrl+W 关闭
   // 用 capture 阶段，抢在 Excalidraw 内部处理之前接管；输入框内不触发
   useEffect(() => {
@@ -393,10 +576,14 @@ function Shell() {
   return (
     <div className="flex h-screen flex-col bg-zinc-100 dark:bg-zinc-950">
       <TitleBar />
-      <Toolbar
+      <TabBar
+        tabs={tabs}
+        activeId={activeId}
         dirty={activeTab?.dirty ?? false}
         theme={theme}
         disabled={busy}
+        onSelect={handleSelect}
+        onClose={handleClose}
         onNew={handleNew}
         onOpen={handleOpen}
         onSave={() => handleSave(false)}
@@ -404,13 +591,7 @@ function Shell() {
         onExportPng={() => handleExport(MIME_TYPES.png)}
         onExportWebp={() => handleExport(MIME_TYPES.webp)}
         onToggleTheme={handleToggleTheme}
-      />
-      <TabBar
-        tabs={tabs}
-        activeId={activeId}
-        onSelect={handleSelect}
-        onClose={handleClose}
-        onNew={handleNew}
+        onAbout={() => setAboutOpen(true)}
       />
       <div className="relative min-h-0 flex-1">
         {tabs.map((t) => (
@@ -425,6 +606,12 @@ function Shell() {
         ))}
       </div>
       <StatusBar count={activeTab?.count ?? 0} zoom={activeTab?.zoom ?? null} />
+      <AboutDialog
+        open={aboutOpen}
+        onClose={() => setAboutOpen(false)}
+        canvases={tabs.length}
+        elements={tabs.reduce((sum, t) => sum + t.count, 0)}
+      />
     </div>
   );
 }
