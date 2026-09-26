@@ -1,0 +1,28 @@
+[package]
+name = "excalidraw-desktop"
+version = "0.1.0"
+description = "Excalidraw 桌面版 —— 手绘白板工具"
+authors = ["you"]
+edition = "2021"
+
+# 库 crate，供 main.rs 与测试复用
+[lib]
+name = "excalidraw_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# 原生文件对话框（保存/打开/导出）
+rfd = "0.15"
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true

@@ -1,0 +1,14 @@
+# 依赖与构建产物
+node_modules/
+dist/
+src-tauri/target/
+src-tauri/gen/
+
+# 临时文件
+*.log
+shot.png
+status.txt
+
+# 系统
+.DS_Store
+Thumbs.db
