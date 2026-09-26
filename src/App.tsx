@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Excalidraw,
   exportToBlob,
+  exportToSvg,
+  exportToClipboard,
   serializeAsJSON,
   restore,
   MIME_TYPES,
@@ -27,7 +29,8 @@ import {
   clearDraft,
 } from "./lib/file";
 
-// 模块级常量，避免每次渲染生成新对象导致 Excalidraw 重复渲染
+// 模块级常量，避免每次渲染生成新对象导致 Excalidraw 重复渲染。
+// as const：让 export/toggleTheme 等保持字面量类型，满足 UIOptions 的窄类型约束
 const UI_OPTIONS = {
   canvasActions: {
     export: false,
@@ -35,7 +38,7 @@ const UI_OPTIONS = {
     loadScene: false,
     toggleTheme: false,
   },
-};
+} as const;
 
 // 定时自动保存到临时草稿的间隔（毫秒）：默认每 5 分钟
 const AUTO_SAVE_MS = 5 * 60 * 1000;
@@ -404,6 +407,129 @@ function Shell() {
     [activeId, tabs, theme, dialogs],
   );
 
+  const handleExportSvg = useCallback(async () => {
+    const id = activeId;
+    const api = apisRef.current[id];
+    if (!api) return;
+    const tab = tabs.find((t) => t.id === id);
+    setBusy(true);
+    try {
+      const elements = api.getSceneElements();
+      const appState = api.getAppState();
+      const files = api.getFiles();
+      const svg = await exportToSvg({
+        elements,
+        appState: { ...appState, theme },
+        files,
+        exportPadding: 12,
+      });
+      const str = new XMLSerializer().serializeToString(svg);
+      const bytes = new TextEncoder().encode(str);
+      const base = (tab?.name ?? "画布").replace(/\.[^.]+$/, "");
+      const p = await exportImage(bytes, `${base}.svg`, "svg");
+      if (p) dialogs.toast({ message: "已导出 SVG" });
+    } catch (e) {
+      dialogs.alert({ title: "导出失败", message: String(e), kind: "error" });
+    } finally {
+      setBusy(false);
+    }
+  }, [activeId, tabs, theme, dialogs]);
+
+  const handleExportPdf = useCallback(async () => {
+    const id = activeId;
+    const api = apisRef.current[id];
+    if (!api) return;
+    const tab = tabs.find((t) => t.id === id);
+    setBusy(true);
+    try {
+      const elements = api.getSceneElements();
+      const appState = api.getAppState();
+      const files = api.getFiles();
+      const svg = await exportToSvg({
+        elements,
+        appState: { ...appState, theme },
+        files,
+        exportPadding: 12,
+      });
+      // SVG 渲染到离屏 canvas 得到位图，再写入 PDF（2x 提升清晰度）
+      const svgStr = new XMLSerializer().serializeToString(svg);
+      const url = URL.createObjectURL(
+        new Blob([svgStr], { type: "image/svg+xml;charset=utf-8" }),
+      );
+      const img = new Image();
+      await new Promise<void>((resolve, reject) => {
+        img.onload = () => resolve();
+        img.onerror = () => reject(new Error("SVG 渲染失败"));
+        img.src = url;
+      });
+      const vb = svg.viewBox.baseVal;
+      const w = vb.width || svg.width.baseVal.value;
+      const h = vb.height || svg.height.baseVal.value;
+      const scale = 2;
+      const canvas = document.createElement("canvas");
+      canvas.width = w * scale;
+      canvas.height = h * scale;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) throw new Error("无法创建画布上下文");
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      URL.revokeObjectURL(url);
+      const pngBlob = await new Promise<Blob>((resolve, reject) => {
+        canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("位图转换失败"))), "image/png");
+      });
+      const { jsPDF } = await import("jspdf");
+      const pdf = new jsPDF({
+        orientation: w >= h ? "landscape" : "portrait",
+        unit: "pt",
+        format: [w, h],
+      });
+      pdf.addImage(
+        new Uint8Array(await pngBlob.arrayBuffer()),
+        "PNG",
+        0,
+        0,
+        w,
+        h,
+      );
+      const arr = pdf.output("arraybuffer");
+      const base = (tab?.name ?? "画布").replace(/\.[^.]+$/, "");
+      const p = await exportImage(new Uint8Array(arr), `${base}.pdf`, "pdf");
+      if (p) dialogs.toast({ message: "已导出 PDF" });
+    } catch (e) {
+      dialogs.alert({ title: "导出失败", message: String(e), kind: "error" });
+    } finally {
+      setBusy(false);
+    }
+  }, [activeId, tabs, theme, dialogs]);
+
+  const handleCopyImage = useCallback(async () => {
+    const api = apisRef.current[activeId];
+    if (!api) return;
+    try {
+      const elements = api.getSceneElements();
+      const appState = api.getAppState();
+      const files = api.getFiles();
+      await exportToClipboard(elements, { ...appState, theme }, files);
+      dialogs.toast({ message: "已复制为图片", kind: "success" });
+    } catch (e) {
+      dialogs.alert({ title: "复制失败", message: String(e), kind: "error" });
+    }
+  }, [activeId, theme, dialogs]);
+
+  const handleCopyJson = useCallback(async () => {
+    const api = apisRef.current[activeId];
+    if (!api) return;
+    try {
+      const elements = api.getSceneElements();
+      const appState = api.getAppState();
+      const files = api.getFiles();
+      const str = serializeAsJSON(elements, appState, files, "local");
+      await navigator.clipboard.writeText(str);
+      dialogs.toast({ message: "已复制 JSON", kind: "success" });
+    } catch (e) {
+      dialogs.alert({ title: "复制失败", message: String(e), kind: "error" });
+    }
+  }, [activeId, dialogs]);
+
   const handleToggleTheme = useCallback(() => {
     const next = theme === "light" ? "dark" : "light";
     Object.values(apisRef.current).forEach((api) => {
@@ -633,6 +759,10 @@ function Shell() {
         onSaveAs={() => handleSave(true)}
         onExportPng={() => handleExport(MIME_TYPES.png)}
         onExportWebp={() => handleExport(MIME_TYPES.webp)}
+        onExportSvg={handleExportSvg}
+        onExportPdf={handleExportPdf}
+        onCopyImage={handleCopyImage}
+        onCopyJson={handleCopyJson}
         onToggleTheme={handleToggleTheme}
         onAbout={() => setAboutOpen(true)}
       />

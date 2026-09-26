@@ -31,6 +31,10 @@ type TabBarProps = {
   onSaveAs: () => void;
   onExportPng: () => void;
   onExportWebp: () => void;
+  onExportSvg: () => void;
+  onExportPdf: () => void;
+  onCopyImage: () => void;
+  onCopyJson: () => void;
   onToggleTheme: () => void;
   onAbout: () => void;
 };
@@ -49,6 +53,10 @@ export default function TabBar({
   onSaveAs,
   onExportPng,
   onExportWebp,
+  onExportSvg,
+  onExportPdf,
+  onCopyImage,
+  onCopyJson,
   onToggleTheme,
   onAbout,
 }: TabBarProps) {
@@ -113,6 +121,10 @@ export default function TabBar({
         onSaveAs={onSaveAs}
         onExportPng={onExportPng}
         onExportWebp={onExportWebp}
+        onExportSvg={onExportSvg}
+        onExportPdf={onExportPdf}
+        onCopyImage={onCopyImage}
+        onCopyJson={onCopyJson}
         onToggleTheme={onToggleTheme}
         onAbout={onAbout}
       />

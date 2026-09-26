@@ -29,6 +29,9 @@
 | 多画布（多标签） | ✅ | 多画布标签切换，每标签独立场景/文件路径/保存状态，关闭未保存需确认；与 excalidraw-cn 的"多画布能力"对齐 |
 | 关闭前未保存确认 | ✅ | 拦截窗口 close（`onCloseRequested`），有未保存更改时弹自绘确认框，防误关丢数据 |
 | 定时自动保存 / 草稿恢复 | ✅ | 每 5 分钟自动把全部画布写入 `app_data_dir/draft.json`；崩溃或误关后启动时询问恢复 |
+| 拖拽 / 粘贴图片入画布 | ✅ | Excalidraw 原生支持；`tauri.conf.json` 设 `dragDropEnabled:false` 释放 HTML5 拖放，粘贴与拖放图片均可直接入画布 |
+| 导出 SVG / PDF | ✅ | `exportToSvg` 矢量导出；SVG→离屏渲染→jsPDF 生成 PDF（2x 清晰） |
+| 复制为图片 / 复制 JSON | ✅ | `exportToClipboard` 复制为 PNG；`serializeAsJSON` + 剪贴板复制 JSON |
 | 保存状态指示 | ✅ | 已保存/未保存胶囊，内容签名判定，不误判视图变化 |
 | 自绘对话框系统 | ✅ | DialogProvider：confirm / alert / toast，替换原生弹窗 |
 | 深色/浅色模式 | ✅ | Tailwind `class` 策略 + Excalidraw 内部主题同步 |
@@ -53,11 +56,8 @@
 
 | 事项 | 说明与收益 |
 |---|---|
-| 拖拽/粘贴图片入画布 | Excalidraw 原生支持，接入后可直接贴截图/图片，白板实用度大幅提升。 |
 | 最近打开文件列表 | 记录 MRU，工具栏下拉直达，省去反复翻文件夹。 |
 | 窗口尺寸 + 主题记忆 | Tauri 持久化窗口位置/大小与明暗主题，下次启动原样恢复。 |
-| 导出 SVG / PDF | 补矢量（SVG）与分享（PDF），覆盖更多场景。 |
-| 复制为图片 / 复制 JSON | 一键复制选中区域或整图到剪贴板，方便贴进文档/汇报。 |
 
 ### 🟢 阶段 2 —— 体验与工程打磨
 

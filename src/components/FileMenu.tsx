@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import type { ComponentType } from "react";
 import {
+  CopyIcon,
+  FileTextIcon,
   FolderOpenIcon,
   ImageIcon,
   InfoIcon,
@@ -24,6 +26,10 @@ type FileMenuProps = {
   onSaveAs: () => void;
   onExportPng: () => void;
   onExportWebp: () => void;
+  onExportSvg: () => void;
+  onExportPdf: () => void;
+  onCopyImage: () => void;
+  onCopyJson: () => void;
   onToggleTheme: () => void;
   onAbout: () => void;
 };
@@ -85,6 +91,15 @@ export default function FileMenu(p: FileMenuProps) {
       items: [
         { icon: ImageIcon, label: "导出为 PNG", onClick: p.onExportPng },
         { icon: ImageIcon, label: "导出为 WebP", onClick: p.onExportWebp },
+        { icon: FileTextIcon, label: "导出为 SVG", onClick: p.onExportSvg },
+        { icon: FileTextIcon, label: "导出为 PDF", onClick: p.onExportPdf },
+      ],
+    },
+    {
+      label: "复制",
+      items: [
+        { icon: CopyIcon, label: "复制为图片", onClick: p.onCopyImage },
+        { icon: CopyIcon, label: "复制为 JSON", onClick: p.onCopyJson },
       ],
     },
     {
