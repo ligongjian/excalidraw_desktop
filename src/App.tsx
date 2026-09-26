@@ -8,7 +8,6 @@ import {
 } from "react";
 import type {
   ExcalidrawImperativeAPI,
-  ExcalidrawInitialDataState,
   AppState,
 } from "@excalidraw/excalidraw/types";
 import type { ExcalidrawElement } from "@excalidraw/excalidraw/element/types";
