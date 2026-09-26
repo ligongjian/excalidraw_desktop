@@ -16,6 +16,7 @@ import TitleBar from "./components/TitleBar";
 import StatusBar from "./components/StatusBar";
 import TabBar, { type TabData } from "./components/TabBar";
 import AboutDialog from "./components/AboutDialog";
+import SplashScreen from "./components/SplashScreen";
 import DialogProvider, { useDialogs } from "./components/ui/DialogProvider";
 import {
   openScene,
@@ -119,6 +120,7 @@ function Shell() {
   const [theme, setTheme] = useState<"light" | "dark">("light");
   const [busy, setBusy] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
+  const [splashDone, setSplashDone] = useState(false);
   const saving = useRef(false);
   // 实时 tabs 引用：供自动保存 / 关闭拦截等异步回调读取最新标签状态
   const tabsRef = useRef<TabData[]>([]);
@@ -131,6 +133,25 @@ function Shell() {
   useEffect(() => {
     tabsRef.current = tabs;
   }, [tabs]);
+
+  // 启动画面：首个画布实例就绪且至少显示 700ms 后淡出，3.5s 兜底强制关闭
+  useEffect(() => {
+    const start = Date.now();
+    const check = window.setInterval(() => {
+      if (
+        Object.values(apisRef.current).some(Boolean) &&
+        Date.now() - start > 700
+      ) {
+        setSplashDone(true);
+        window.clearInterval(check);
+      }
+    }, 100);
+    const max = window.setTimeout(() => setSplashDone(true), 3500);
+    return () => {
+      window.clearInterval(check);
+      window.clearTimeout(max);
+    };
+  }, []);
 
   // 同步 Tailwind 的 class 暗色策略与系统 color-scheme
   useEffect(() => {
@@ -516,16 +537,38 @@ function Shell() {
         const ok = await dialogs.confirm({
           title: "关闭窗口",
           message:
-            "有画布包含未保存的更改。是否先把当前内容保存为草稿，再退出？草稿可在下次启动时恢复。",
-          okText: "保存草稿并退出",
+            "有画布包含未保存的更改。是否先保存这些画布，再退出？未保存成功则不会退出。",
+          okText: "保存并退出",
           cancelText: "暂不退出",
           danger: true,
         });
-        if (ok) {
-          await saveDraft();
-          allowCloseRef.current = true;
-          win.close();
+        if (!ok) return;
+        // 先正式保存所有未保存的画布；任一保存失败/取消则留在应用，不退出
+        for (const t of tabsRef.current) {
+          if (!t.dirty) continue;
+          const api = apisRef.current[t.id];
+          if (!api) continue;
+          const elements = api.getSceneElements();
+          const appState = api.getAppState();
+          const files = api.getFiles();
+          const str = serializeAsJSON(elements, appState, files, "local");
+          const p = await saveScene(str, t.filePath ?? undefined);
+          if (p == null) {
+            dialogs.toast({ message: "已取消保存，未退出", kind: "info" });
+            return;
+          }
+          setTabs((prev) =>
+            prev.map((x) =>
+              x.id === t.id
+                ? { ...x, filePath: p, dirty: false, baselineReady: true, restored: false }
+                : x,
+            ),
+          );
         }
+        await saveDraft();
+        allowCloseRef.current = true;
+        // 用 destroy 直接销毁，避免再次触发 onCloseRequested 造成循环/权限报错
+        win.destroy();
       });
       if (disposed) unlisten?.();
     })();
@@ -612,6 +655,7 @@ function Shell() {
         canvases={tabs.length}
         elements={tabs.reduce((sum, t) => sum + t.count, 0)}
       />
+      <SplashScreen visible={!splashDone} />
     </div>
   );
 }
