@@ -84,6 +84,19 @@ npm run tauri build -- --no-bundle   # 仅生成可独立运行的 exe（内置�
 
 发布版可执行文件位于 `src-tauri/target/release/excalidraw-desktop.exe`，双击即可运行。
 
+## 排障：Excalidraw 样式引入
+
+Excalidraw 组件需要引入其样式表，请在 `src/main.tsx` 顶部使用**包声明的规范子路径**引入：
+
+```ts
+import "@excalidraw/excalidraw/index.css";
+```
+
+⚠️ 不要直接引包内部 `dist` 路径（如 `@excalidraw/excalidraw/dist/prod/index.css`），
+该路径不在包的 `exports` 白名单内，vite 会报
+`"./dist/prod/index.css" is not exported under the conditions [...]`。
+用上面规范写法即可，vite 会按 dev/prod 环境自动解析到对应样式文件。
+
 ## 验证情况
 
 - 前端：`tsc --noEmit` 类型检查通过；`vite build` 生产构建成功；
